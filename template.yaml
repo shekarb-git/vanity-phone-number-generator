@@ -1,0 +1,710 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'The template deploys a simple Amazon Connect Customer Contact Flow that can generate Vanity Phone Number for a Phone Number provided by Customer.'
+
+Parameters:
+  # Amazon Connect Instance ARN is required to associate Lambda function to be invoked in the Contact Flows
+  ConnectInstanceARN:
+    Type: String
+    Description: Amazon Connect Instance ARN.
+
+  # S3 Bucketname where Lambda code Zip is uploaded to
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 Bucket.
+
+  # S3 Bucketname Key of Zipfile where Lambda code is uploaded to for VanityNumbersLambda
+  S3BucketKeyVanityNumbersLambda:
+    Type: String
+    Default: generateVanityNumbers.zip
+    Description: Name of the S3 Bucket Key for VanityNumbersLambda source Zipfile. 
+
+  # S3 Bucketname Key of Zipfile where Lambda code is uploaded to for DisplayVanityNumbersLambda
+  S3BucketKeyDisplayVanityNumbersLambda:
+    Type: String
+    Default: displayVanityNumbers.zip
+    Description: Name of the S3 Bucket Key for DisplayVanityNumbersLambda source Zipfile. 
+
+  # Name of the Lambda to be used to Generate Vanity Numbers
+  VanityNumbersLambda:
+    Type: String
+    Default: generateVanityNumbers
+    Description: Name of the Lambda function.
+
+  # Name of the Lambda to be used to Display Vanity Numbers
+  DisplayVanityNumbersLambda:
+    Type: String
+    Default: displayVanityNumbers
+    Description: Name of the Lambda function.
+
+  # Name of the DynamoDB table to be used to store generated Vanity Numbers
+  DynamoDBTableName:
+    Type: String
+    Default: VanityNumbers
+    Description: Name of the DynamoDB Table for storing Vanity Numbers for the CallerNumber.  
+    
+Resources:
+  # Create the custom IAM Role for the Lambda Function VanityNumbersLambda
+  GenerateVanityNumbersLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${VanityNumbersLambda}-LambdaExecutionRole'
+      Description: !Sub 'Lambda execution role for ${VanityNumbersLambda}'
+
+      # Trust policy allowing the Lambda service to assume this role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      
+      # Inline policy with specific permissions, logging and DynamoDB Get/Put
+      Policies:
+        - PolicyName: !Sub '${VanityNumbersLambda}-role-permissions'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${VanityNumbersLambda}:*'
+
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:GetItem'
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}'
+
+  # Create the custom IAM Role for the Lambda Function VanityNumbersLambda
+  DisplayVanityNumbersLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${DisplayVanityNumbersLambda}-LambdaExecutionRole'
+      Description: !Sub 'Lambda execution role for ${DisplayVanityNumbersLambda}'
+
+      # Trust policy allowing the Lambda service to assume this role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      
+      # Inline policy with specific permissions, logging and DynamoDB Get/Put
+      Policies:
+        - PolicyName: !Sub '${DisplayVanityNumbersLambda}-role-permissions'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${DisplayVanityNumbersLambda}:*'
+
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:GetItem'
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}'
+
+  # Create DynamoDB which will be used to store generated Vanity Numbers
+  VanityNumbersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${DynamoDBTableName}'
+
+      AttributeDefinitions:
+        - AttributeName: CallerNumber
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: CallerNumber
+          KeyType: HASH
+
+      BillingMode: PAY_PER_REQUEST
+
+  # Create Python based Lambda Function that will Generate Vanity Numbers for a given number
+  GenerateVanityNumbersFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${VanityNumbersLambda}'
+      Handler: generateVanityNumbers.lambda_handler
+      Role: !GetAtt GenerateVanityNumbersLambdaExecutionRole.Arn
+      Runtime: python3.14
+      Timeout: 60
+      
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Sub ${DynamoDBTableName}
+          LOG_LEVEL: INFO
+
+      Code:
+        S3Bucket: !Sub '${S3BucketName}'
+        S3Key: !Sub '${S3BucketKeyVanityNumbersLambda}'
+
+  # Create Python based Lambda Function that will Display Vanity Numbers
+  DisplayVanityNumbersFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${DisplayVanityNumbersLambda}'
+      Handler: displayVanityNumbers.lambda_handler
+      Role: !GetAtt DisplayVanityNumbersLambdaExecutionRole.Arn
+      Runtime: python3.14
+      Timeout: 60
+      
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Sub ${DynamoDBTableName}
+          LOG_LEVEL: INFO
+
+      Code:
+        S3Bucket: !Sub '${S3BucketName}'
+        S3Key: !Sub '${S3BucketKeyDisplayVanityNumbersLambda}'
+  
+  # Generate Function URL for the Lambda Function that will Display Vanity Numbers
+  DisplayVanityNumbersFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt DisplayVanityNumbersFunction.Arn
+      AuthType: NONE
+  
+  # Add required permissions to allow Function URL to be accessible
+  DisplayVanityNumbersFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DisplayVanityNumbersFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+  
+  # Add required permissions to allow Function URL to be accessible
+  DisplayVanityNumbersFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DisplayVanityNumbersFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  # White-list the Lambda Function for Amazon Connect Instance
+  ConnectLambdaIntegration:
+    Type: AWS::Connect::IntegrationAssociation
+    Properties:
+      InstanceId: !Ref ConnectInstanceARN
+      IntegrationType: "LAMBDA_FUNCTION"
+      IntegrationArn: !GetAtt GenerateVanityNumbersFunction.Arn
+
+  # Enable GenerateVanityNumbersFunction for Amazon Connect Instance Flows
+  ConnectLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GenerateVanityNumbersFunction
+      Action: lambda:InvokeFunction
+      Principal: connect.amazonaws.com
+      SourceArn: !Ref ConnectInstanceARN
+
+  # Create Inbound Contact Flow for Vaniaty Number Generator
+  VanityNumbersContactFlow:
+    Type: AWS::Connect::ContactFlow
+    DependsOn: 
+      - GenerateVanityNumbersFunction
+      - ConnectLambdaIntegration
+      - ConnectLambdaInvokePermission
+    Properties:
+      InstanceArn: !Ref ConnectInstanceARN
+      Name: "Vanity Number Contact Flow"
+      Description: "Vanity Number Contact Flow"
+      Type: "CONTACT_FLOW"
+      State: "ACTIVE"
+      Content:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2019-10-30",
+              "StartAction": "Enable_Logging",
+              "Metadata": {
+                "entryPointPosition": {
+                  "x": -1800,
+                  "y": 291.2
+                },
+                "ActionMetadata": {
+                  "ReadPhoneNumber": {
+                    "position": {
+                      "x": 335.2,
+                      "y": 88.8
+                    },
+                    "isFriendlyName": true
+                  },
+                  "GenerateVanityNumbers": {
+                    "position": {
+                      "x": 749.6,
+                      "y": -69.6
+                    },
+                    "isFriendlyName": true,
+                    "parameters": {
+                      "LambdaFunctionARN": {
+                        "displayName": "generateVanityNumbers"
+                      },
+                      "LambdaInvocationAttributes": {
+                        "PhoneNumber": {
+                          "useDynamic": true
+                        }
+                      }
+                    },
+                    "dynamicMetadata": {
+                      "PhoneNumber": true
+                    }
+                  },
+                  "ReadVanityPhoneNumber": {
+                    "position": {
+                      "x": 1011.2,
+                      "y": -75.2
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Enable_Logging": {
+                    "position": {
+                      "x": -1543.2,
+                      "y": 378.4
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Disconnect_Flow": {
+                    "position": {
+                      "x": 1432.8,
+                      "y": 307.2
+                    },
+                    "isFriendlyName": true
+                  },
+                  "444b7029-dd0d-4f29-9d1b-598241bc2512": {
+                    "position": {
+                      "x": -1314.4,
+                      "y": 571.2
+                    },
+                    "parameters": {
+                      "TextToSpeechVoice": {
+                        "languageCode": "en-US"
+                      }
+                    },
+                    "overrideConsoleVoice": false
+                  },
+                  "Want_Try_Again": {
+                    "position": {
+                      "x": -956,
+                      "y": -75.2
+                    },
+                    "isFriendlyName": true
+                  },
+                  "No_Response": {
+                    "position": {
+                      "x": -769.6,
+                      "y": 798.4
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Thank_you": {
+                    "position": {
+                      "x": -360,
+                      "y": 740.8
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Welcome_Message": {
+                    "position": {
+                      "x": -1015.2,
+                      "y": 509.6
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Invalid_PhoneNumber": {
+                    "position": {
+                      "x": -262.4,
+                      "y": 474.4
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Store_Phone_Number": {
+                    "position": {
+                      "x": 31.2,
+                      "y": 200.8
+                    },
+                    "isFriendlyName": true,
+                    "parameters": {
+                      "Attributes": {
+                        "PhoneNumberRequested": {
+                          "useDynamic": true
+                        }
+                      }
+                    },
+                    "dynamicParams": [
+                      "PhoneNumberRequested"
+                    ]
+                  },
+                  "Error_Message": {
+                    "position": {
+                      "x": 1017.6,
+                      "y": 505.6
+                    },
+                    "isFriendlyName": true
+                  },
+                  "Check_Continue": {
+                    "position": {
+                      "x": -729.6,
+                      "y": 164.8
+                    },
+                    "isFriendlyName": true,
+                    "conditionMetadata": [
+                      {
+                        "id": "7e79ffc1-01f5-4a85-8990-fcd380156fec",
+                        "value": "1"
+                      }
+                    ]
+                  },
+                  "Get_Phone_Number": {
+                    "position": {
+                      "x": -388,
+                      "y": -43.2
+                    },
+                    "isFriendlyName": true,
+                    "conditionMetadata": [],
+                    "countryCodePrefix": "+1"
+                  }
+                },
+                "Annotations": [],
+                "name": "Vanity Number Contact Flow",
+                "description": "Vanity Number Contact Flow",
+                "type": "contactFlow",
+                "status": "published",
+                "hash": {}
+              },
+              "Actions": [
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "<speak>\n    The phone number you entered is <say-as interpret-as=\"telephone\">$.Attributes.PhoneNumberRequested</say-as>\n</speak>"
+                  },
+                  "Identifier": "ReadPhoneNumber",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "GenerateVanityNumbers",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "LambdaFunctionARN": "${GenerateVanityNumbersFunctionArn}",
+                    "InvocationTimeLimitSeconds": "3",
+                    "InvocationType": "SYNCHRONOUS",
+                    "LambdaInvocationAttributes": {
+                      "PhoneNumber": "$.Attributes.PhoneNumberRequested"
+                    },
+                    "ResponseValidation": {
+                      "ResponseType": "STRING_MAP"
+                    }
+                  },
+                  "Identifier": "GenerateVanityNumbers",
+                  "Type": "InvokeLambdaFunction",
+                  "Transitions": {
+                    "NextAction": "ReadVanityPhoneNumber",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "<speak>\n    The Vanity Numbers generated are <say-as interpret-as=\"telephone\">$.External.BestVanity1\n</say-as>, <say-as interpret-as=\"telephone\">$.External.BestVanity2\n</say-as>,\n<say-as interpret-as=\"telephone\">$.External.BestVanity3\n</say-as>\n</speak>"
+                  },
+                  "Identifier": "ReadVanityPhoneNumber",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Want_Try_Again",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "FlowLoggingBehavior": "Disabled"
+                  },
+                  "Identifier": "Enable_Logging",
+                  "Type": "UpdateFlowLoggingBehavior",
+                  "Transitions": {
+                    "NextAction": "444b7029-dd0d-4f29-9d1b-598241bc2512"
+                  }
+                },
+                {
+                  "Parameters": {},
+                  "Identifier": "Disconnect_Flow",
+                  "Type": "DisconnectParticipant",
+                  "Transitions": {}
+                },
+                {
+                  "Parameters": {
+                    "TextToSpeechVoice": "Joanna"
+                  },
+                  "Identifier": "444b7029-dd0d-4f29-9d1b-598241bc2512",
+                  "Type": "UpdateContactTextToSpeechVoice",
+                  "Transitions": {
+                    "NextAction": "Welcome_Message",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "Would you like to try another phone number?"
+                  },
+                  "Identifier": "Want_Try_Again",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Check_Continue",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "Sorry, I did not get response."
+                  },
+                  "Identifier": "No_Response",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Check_Continue",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "Thank you for calling, Good bye!"
+                  },
+                  "Identifier": "Thank_you",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Disconnect_Flow",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "Hi, I am Erica, your virtual assistant. I can help turn your phone number into a vanity number. Let's get started."
+                  },
+                  "Identifier": "Welcome_Message",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Check_Continue",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "Phone Number you entered is not valid."
+                  },
+                  "Identifier": "Invalid_PhoneNumber",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Get_Phone_Number",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "Attributes": {
+                      "PhoneNumberRequested": "$.StoredCustomerInput"
+                    },
+                    "TargetContact": "Current"
+                  },
+                  "Identifier": "Store_Phone_Number",
+                  "Type": "UpdateContactAttributes",
+                  "Transitions": {
+                    "NextAction": "ReadPhoneNumber",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "SkipWhenDTMFBufferEnabled": "false",
+                    "Text": "Sorry, something went wrong. Please try again later.\n\nGood bye!"
+                  },
+                  "Identifier": "Error_Message",
+                  "Type": "MessageParticipant",
+                  "Transitions": {
+                    "NextAction": "Disconnect_Flow",
+                    "Errors": [
+                      {
+                        "NextAction": "Disconnect_Flow",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "StoreInput": "False",
+                    "InputTimeLimitSeconds": "5",
+                    "Text": "Press 1 to continue, press any other key to try at later time."
+                  },
+                  "Identifier": "Check_Continue",
+                  "Type": "GetParticipantInput",
+                  "Transitions": {
+                    "NextAction": "Thank_you",
+                    "Conditions": [
+                      {
+                        "NextAction": "Get_Phone_Number",
+                        "Condition": {
+                          "Operator": "Equals",
+                          "Operands": [
+                            "1"
+                          ]
+                        }
+                      }
+                    ],
+                    "Errors": [
+                      {
+                        "NextAction": "No_Response",
+                        "ErrorType": "InputTimeLimitExceeded"
+                      },
+                      {
+                        "NextAction": "Thank_you",
+                        "ErrorType": "NoMatchingCondition"
+                      },
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Parameters": {
+                    "StoreInput": "True",
+                    "InputTimeLimitSeconds": "5",
+                    "Text": "Please enter the phone number you want to check.",
+                    "DTMFConfiguration": {
+                      "InterdigitTimeLimitSeconds": "5"
+                    },
+                    "InputValidation": {
+                      "PhoneNumberValidation": {
+                        "NumberFormat": "Local",
+                        "CountryCode": "US"
+                      }
+                    }
+                  },
+                  "Identifier": "Get_Phone_Number",
+                  "Type": "GetParticipantInput",
+                  "Transitions": {
+                    "NextAction": "Store_Phone_Number",
+                    "Errors": [
+                      {
+                        "NextAction": "Error_Message",
+                        "ErrorType": "NoMatchingError"
+                      },
+                      {
+                        "NextAction": "Invalid_PhoneNumber",
+                        "ErrorType": "InvalidPhoneNumber"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }                                    
+          - GenerateVanityNumbersFunctionArn: !GetAtt GenerateVanityNumbersFunction.Arn
+
+Outputs:
+
+  GenerateVanityNumbersLambdaExecutionRole:
+    Description: Lambda function generateVanityNumbers Execution Role ARN.
+    Value: !GetAtt GenerateVanityNumbersLambdaExecutionRole.Arn
+
+  DisplayVanityNumbersLambdaExecutionRole:
+    Description: Lambda function displayVanityNumbers Execution Role ARN.
+    Value: !GetAtt DisplayVanityNumbersLambdaExecutionRole.Arn
+
+  GenerateVanityNumbersFunctionFunctionArn:
+    Description: Lambda function generateVanityNumbers ARN.
+    Value: !GetAtt GenerateVanityNumbersFunction.Arn
+
+  DisplayVanityNumbersFunctionArn:
+    Description: Lambda function displayVanityNumbers ARN.
+    Value: !GetAtt DisplayVanityNumbersFunction.Arn
+  
+  DisplayVanityNumbersFunctionURL:
+    Description: Lambda displayVanityNumbers function URL.
+    Value: !GetAtt DisplayVanityNumbersFunctionUrl.FunctionUrl
+  
+  DynamoDBTableArn:
+    Description: ARN for VanityNumbers DynamoDB table.
+    Value: !GetAtt VanityNumbersTable.Arn
+    
+  VanityNumbersContactFlow:
+    Description: Vanity Number Contact Flow ARN.
+    Value: !GetAtt VanityNumbersContactFlow.ContactFlowArn
