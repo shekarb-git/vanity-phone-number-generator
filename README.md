@@ -166,6 +166,8 @@ Delete all resources created by this project:
 
 ```bash
 aws cloudformation delete-stack --stack-name aws-connect-vanity-number-generator
+aws s3 rm s3://<your-s3-bucket>/displayVanityNumbers.zip
+aws s3 rm s3://<your-s3-bucket>/generateVanityNumbers.zip
 ```
 
 ---
