@@ -60,7 +60,7 @@ aws s3 cp generateVanityNumbers.zip s3://<your-s3-bucket>
 aws s3 cp displayVanityNumbers.zip s3://<your-s3-bucket>
 ```
 
-Replace `<your-s3-bucket>` with the name of your S3 bucket.
+Replace `<your-s3-bucket>` with the name of your S3 bucket. The `template.yaml` file assumes that above files are uploaded to Root Directory of s3 bucket.
 
 ---
 
